@@ -21,7 +21,7 @@ terminal; expect `{"status": "ok"}`.
 Expose **8080 as an HTTP port** in the RunPod pod settings. Open the HTTP
 proxy endpoint for port 8080 on your Windows PC:
 
-https://scrvdw2plzx7z6-8080.proxy.runpod.net
+https://9ykl8eclcuuqaa-8080.proxy.runpod.net
 
 Click **Start Stream**. The browser needs no camera/microphone permission.
 Expected status: Connecting → Connected. You should see a moving green circle,
