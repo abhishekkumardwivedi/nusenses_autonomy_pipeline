@@ -13,3 +13,7 @@ checkpoints/
 *.tgz
 *.tar
 *.tar.gz
+.cache/
+*.pth
+*.pt
+*.onnx

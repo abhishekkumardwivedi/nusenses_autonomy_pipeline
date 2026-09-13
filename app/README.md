@@ -13,7 +13,7 @@ source .venv-player/bin/activate
 pip install -r app/requirements.txt
 export NUSCENES_DATAROOT=/workspace/data/nuscenes
 export NUSCENES_VERSION=v1.0-mini
-python app/server.py
+python app/server.py --stage 2
 ```
 
 The dataset already on this pod is `/workspace/data/nuscenes`. If no environment
@@ -28,7 +28,7 @@ environment and `python server.py` in `webrtc_test/`.
 
 Open on your PC:
 
-https://9ykl8eclcuuqaa-8080.proxy.runpod.net/
+https://ikshk0dzrpwflf-8080.proxy.runpod.net/
 
 Select a scene in the dropdown and press **Play**. Play also connects WebRTC if
 needed. **Connect video** shows the current sample while paused. Pause holds the

@@ -5,13 +5,14 @@ import time
 from fractions import Fraction
 from aiortc import VideoStreamTrack
 from av import VideoFrame
-from .renderer import render
+from .renderer import render, FOCUS_MODES, PANELS
+from .nuscenes_source import CAMERAS
 
 LOG = logging.getLogger("player")
 
 
 class Player:
-    def __init__(self, source, scene):
+    def __init__(self, source, scene, encoder=None):
         self.source, self.initial_scene = source, scene
         self.lock = asyncio.Lock()
         self.playing, self.rate, self.error = False, 1.0, None
@@ -20,27 +21,43 @@ class Player:
         self.due = 0
         self.fps_start, self.advances = time.monotonic(), 0
         self.task = None
+        self.encoder, self.data = encoder, None
+        self.view = {"focus": "overview", "feature_camera": "CAM_FRONT", "feature_mode": "mean", "feature_channel": 0}
 
     def _render(self, scene, samples, index):
         start = time.monotonic()
         data = self.source.load(samples[index])
         loaded = time.monotonic()
-        frame = render(data, scene, samples[index], index, len(samples))
+        encoder_info = {"enabled": False, "preprocess_ms": 0, "camera_encoder_ms": 0, "inference_count": 0}
+        if self.encoder is not None:
+            tensor, encoder_info = self.encoder.encode(data["cameras"])
+            data["feature_tensor"] = tensor
+            data["features"] = tensor.numpy()
+        render_start = time.monotonic()
+        frame = render(data, scene, samples[index], index, len(samples), self.view, encoder_info)
         rendered = time.monotonic()
         ms = (time.monotonic() - start) * 1000
         details = {"sensors": data["sensors"], "ego_pose": data["ego_pose"],
                    "lidar_points": data["lidar"].shape[1], "radar_points": data["radar"].shape[1],
                    "load_ms": round((loaded - start) * 1000, 1),
-                   "render_ms": round((rendered - loaded) * 1000, 1), "load_render_ms": round(ms, 1)}
+                   "sensor_load_ms": round((loaded - start) * 1000, 1),
+                   "preprocess_ms": encoder_info["preprocess_ms"], "camera_encoder_ms": encoder_info["camera_encoder_ms"],
+                   "render_ms": round((rendered - render_start) * 1000, 1), "load_render_ms": round(ms, 1),
+                   "total_ms": round(ms, 1), "view_render_ms": 0, "encoder": encoder_info}
         LOG.info("scene=%s sample=%s/%s timestamp=%s load=%.1fms render=%.1fms total=%.1fms",
                  scene["name"], index + 1, len(samples), samples[index]["timestamp"],
                  details["load_ms"], details["render_ms"], ms)
-        return frame, details
+        if self.encoder is not None:
+            LOG.info("Camera encoder #%s preprocess=%.2fms inference=%.2fms shape=%s",
+                     encoder_info["inference_count"], details["preprocess_ms"], details["camera_encoder_ms"], encoder_info["output_shape"])
+        return frame, details, data
 
     async def load(self, scene, samples, index):
+        if self.data is not None and self.samples[self.index]["token"] == samples[index]["token"]:
+            return
         # Publish frame and metadata together, only after every sensor succeeds.
-        frame, details = await asyncio.to_thread(self._render, scene, samples, index)
-        self.frame, self.details = frame, details
+        frame, details, data = await asyncio.to_thread(self._render, scene, samples, index)
+        self.frame, self.details, self.data = frame, details, data
         self.scene, self.samples, self.index = scene, samples, index
         self.error = None
 
@@ -61,11 +78,41 @@ class Player:
                 "playing": self.playing, "rate": self.rate, "error": self.error,
                 "playback_fps": round(self.advances / elapsed, 2) if self.playing else 0,
                 "source_fps": round(1 / source_interval, 2) if source_interval > 0 else 0,
+                "stage": 3 if self.encoder is not None else 2, "view": dict(self.view),
+                "panels": PANELS if self.encoder is not None else {}, "video_size": [1600, 900],
                 **self.details}
+
+    async def change_view(self, action, value):
+        view = dict(self.view)
+        if action == "focus":
+            if value not in FOCUS_MODES or (value == "FEATURE" and self.encoder is None):
+                raise ValueError("Invalid/unavailable focus panel")
+            view["focus"] = value
+        elif action == "feature_camera":
+            if value not in CAMERAS:
+                raise ValueError("Invalid feature camera")
+            view[action] = value
+        elif action == "feature_mode":
+            if value not in ("mean", "channel"):
+                raise ValueError("Feature mode must be mean or channel")
+            view[action] = value
+        elif action == "feature_channel":
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < 256:
+                raise ValueError("Feature channel must be an integer from 0 to 255")
+            view[action] = value
+        if view == self.view:
+            return
+        start = time.monotonic()
+        frame = await asyncio.to_thread(render, self.data, self.scene, self.samples[self.index],
+                                        self.index, len(self.samples), view, self.details["encoder"])
+        self.frame, self.view = frame, view
+        self.details["view_render_ms"] = round((time.monotonic() - start) * 1000, 2)
 
     async def command(self, action, value=None):
         async with self.lock:
-            if action == "play":
+            if action in ("focus", "feature_camera", "feature_mode", "feature_channel"):
+                await self.change_view(action, value)
+            elif action == "play":
                 if self.index == len(self.samples) - 1:
                     await self.load(self.scene, self.samples, 0)
                 if not self.playing:

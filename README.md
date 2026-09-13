@@ -1,22 +1,28 @@
 # nuScenes autonomy playback
 
-Minimal Python + plain HTML WebRTC experiments for RunPod. Current scope stops
-at recorded synchronized sensor visualization. No neural networks or inference.
+Minimal Python + plain HTML WebRTC experiments for RunPod. Current scope is
+Stage 3: pretrained camera encoder inference and feature inspection. LiDAR and
+radar remain raw/geometric. No learned BEV or object detection exists yet.
 
 - **Stage 1:** in-memory synthetic live video; [instructions](webrtc_test/README.md).
 - **Stage 2:** nuScenes devkit sample playback with six cameras, LiDAR/radar
   geometric BEV, and Play/Pause/step/scene controls; [instructions](app/README.md).
+- **Stage 3:** shared pretrained ResNet-50, cached feature tensors, mean/channel
+  inspection, high-resolution focus panels and runtime metrics;
+  [model, limitations and verification](app/STAGE3.md).
 
-## Run Stage 2 on RunPod
+## Run Stage 3 on RunPod
 
 ```bash
 cd /workspace/autonomy
-python3.11 -m venv .venv-player
-source .venv-player/bin/activate
+# Use the RunPod Python that already has working torch and torchvision.
+python -m venv --system-site-packages .venv-stage3
+source .venv-stage3/bin/activate
 pip install -r app/requirements.txt
 export NUSCENES_DATAROOT=/workspace/data/nuscenes
 export NUSCENES_VERSION=v1.0-mini
-python app/server.py
+export TORCH_HOME=/workspace/.cache/torch
+python app/server.py --stage 3
 ```
 
 The default dataset root (when unset) is `/workspace/autonomy/datasets/nuscenes`.
@@ -28,3 +34,26 @@ Open your RunPod HTTP proxy endpoint for port 8080, select a scene, and press
 Play. `/health` returns `{"status":"ok"}`. Media uses WebRTC; the HTTP proxy
 carries the page and SDP signaling. Optional TURN settings are documented in
 the Stage 1 instructions for networks where direct ICE connectivity fails.
+
+Current browser URL: https://ikshk0dzrpwflf-8080.proxy.runpod.net/
+
+For preserved Stage 2 without torch, use its `.venv-player` environment and
+`python app/server.py --stage 2`. Stage 3 uses the pod's existing Python 3.12
+PyTorch/CUDA stack; Stage 2's Python 3.11 environment remains separate.
+
+```mermaid
+flowchart TD
+  S[nuScenes sample] --> C[6 camera images]
+  C --> P[RGB resize and ImageNet normalization]
+  P --> R[Shared pretrained ResNet-50]
+  R --> A[Fixed 1x1 reduction: 2048 to 256 channels]
+  A --> T[Tensor: 1 x 6 x 256 x 8 x 14]
+  T --> K[Cached features]
+  K --> V[Feature inspection and focus renderer]
+  S --> L[LiDAR and radar]
+  L --> G[Stage 2 geometric transform]
+  G --> B[Raw sensor BEV]
+  B --> V
+  V --> W[One WebRTC stream]
+  W --> PC[PC browser]
+```

@@ -2,17 +2,23 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nuScenes · Stage 2 playback</title>
+<title>nuScenes Stage 3 · Camera Encoder + Multi-Sensor Playback</title>
 <style>
 body { max-width:1600px; margin:20px auto; padding:0 16px; background:#111820; color:#e9edf2; font:15px system-ui; }
 h1 { font-size:24px; margin:12px 0; }
-video { display:block; width:100%; max-height:70vh; aspect-ratio:16/9; background:black; margin:12px 0; }
+#viewport { position:relative; width:min(100%, calc(72vh * 16 / 9)); aspect-ratio:16/9; margin:12px auto; background:black; }
+video { display:block; width:100%; height:100%; object-fit:contain; }
+#expand-buttons { position:absolute; inset:0; pointer-events:none; }
+.expand { position:absolute; pointer-events:auto; font-size:12px; padding:3px 5px; background:#192833dd; color:white; border:1px solid #87929e; cursor:pointer; }
+#runtime { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px; }
+#runtime p { padding:10px; background:#1b2630; white-space:pre-line; }
 button,select { padding:9px 13px; margin:3px; font:inherit; }
 p { margin:8px 0; } #error { color:#ffb088; } #sample-status { font-variant-numeric:tabular-nums; }
 pre { overflow:auto; font-size:12px; } .controls { display:flex; flex-wrap:wrap; align-items:center; }
 </style>
-<h1>nuScenes · Synchronized sensor playback</h1>
-<p>Recorded keyframes (~2 Hz at 1×) · WebRTC refresh target 25 FPS · geometric sensor BEV</p>
+<h1 id="heading">nuScenes Stage 3 · Camera Encoder + Multi-Sensor Playback</h1>
+<p id="stage-label">Recorded real-world sensor data · AI inference: Camera Encoder ENABLED</p>
+<p>RAW CAMERA = recorded RGB · SENSOR BEV = geometric projection, no ML · CAMERA ENCODER = learned representation, not semantic classes</p>
 <div class="controls">
   <label>Scene <select id="scene" disabled></select></label>
   <label>Rate <select id="rate"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
@@ -20,71 +26,37 @@ pre { overflow:auto; font-size:12px; } .controls { display:flex; flex-wrap:wrap;
   <button id="previous" data-control disabled>Previous sample</button><button id="next" data-control disabled>Next sample</button>
   <button id="restart" data-control disabled>Restart scene</button>
 </div>
+<div class="controls">
+  <label>Focus <select id="focus"><option value="overview">Overview</option></select></label>
+  <button id="overview">Return to overview (Esc)</button>
+  <label>Feature camera <select id="feature-camera"></select></label>
+  <label>Feature view <select id="feature-mode"><option value="mean">Mean activation</option><option value="channel">Channel</option></select></label>
+  <label>Feature channel <input id="feature-channel" type="number" min="0" max="255" step="1" value="0" disabled style="width:65px"></label>
+</div>
 <p id="sample-status">Loading dataset…</p><p id="error" role="alert"></p>
-<video id="video" autoplay playsinline muted></video>
+<div id="viewport"><video id="video" autoplay playsinline muted></video><div id="expand-buttons"></div></div>
+<p>Double-click a panel or use its Expand button. Double-click again or press Esc to return. Focus re-renders original sensor data; it uses the same WebRTC connection.</p>
 <button id="start">Connect video</button><button id="stop" disabled>Disconnect video</button>
 <p>WebRTC: <strong id="status">Disconnected</strong> · <span id="stats">No video received.</span></p>
+<section aria-label="What is happening">
+<h2>What is happening?</h2>
+<div id="runtime"><p>Waiting for runtime measurements…</p></div>
+<ol id="stage3-steps">
+<li>Read one nuScenes sample and its six camera, LiDAR and radar records.</li>
+<li>Preserve sensor timestamps and transform point sensors into the sample’s reference ego frame.</li>
+<li>Convert camera BGR → RGB; resize to 448 × 256; convert to float [0,1]; normalize using ImageNet mean/std; arrange CHW.</li>
+<li>Batch six cameras through one shared pretrained ResNet-50 in eval + inference mode.</li>
+<li>Reduce 2048 backbone channels to 256 with a frozen averaging 1×1 projection. This projection is fixed, not trained.</li>
+<li>Cache the [1,6,256,8,14] tensor. Mean activation is mean(abs(feature)) across channels; Channel shows one of 256 activations.</li>
+<li>Normalize each displayed map to its own min/max. Colors do not identify objects or semantic classes. The 8 × 14 cells are shown without inventing detail.</li>
+<li>Re-render the chosen panel and stream it over WebRTC. Video refresh does not rerun inference.</li>
+</ol>
+<p><strong>dt</strong> is sensor capture-time offset relative to the selected nuScenes sample/reference time. Batching the images for neural inference does not remove this temporal skew.</p>
+<p>LiDAR and radar remain raw/geometric. No learned BEV, depth, detection, or other Stage 4 processing exists.</p>
+</section>
 <details><summary>Sample and sensor synchronization details</summary><pre id="details"></pre></details>
 <p>One shared timeline for this test. Next/Previous/Restart/scene selection pause playback. End of scene holds the final sample.</p>
 <script>const iceServers = __ICE_SERVERS__;</script>
 <script src="/client.js"></script>
-<script>
-const sceneSelect = document.getElementById('scene');
-const rateSelect = document.getElementById('rate');
-const playbackStatus = document.getElementById('sample-status');
-const errorText = document.getElementById('error');
-let busy = false;
-function showState(state) {
-  sceneSelect.value = state.scene_token;
-  rateSelect.value = String(state.rate);
-  playbackStatus.textContent = `${state.scene} | Sample ${state.sample_index}/${state.total_samples} | Timestamp ${state.timestamp} µs | ${state.playing ? 'Playing' : 'Paused'} | Source ${state.source_fps} Hz | Playback ${state.playback_fps} samples/s | LiDAR ${state.lidar_points} · Radar ${state.radar_points} | Load+render ${state.load_render_ms} ms`;
-  errorText.textContent = state.error || '';
-  document.getElementById('details').textContent = JSON.stringify({scene_token:state.scene_token, sample_token:state.sample_token, timestamp:state.timestamp, ego_pose:state.ego_pose, sensors:state.sensors}, null, 2);
-}
-async function command(action, value) {
-  if (busy) return;
-  busy = true;
-  try {
-    const response = await fetch('/control', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action,value})});
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
-    showState(data);
-  } catch (error) { errorText.textContent = error.message; }
-  finally { busy = false; }
-}
-document.getElementById('play').onclick = async () => {
-  if (!pc) await startStream();
-  if (pc) await command('play');
-};
-for (const action of ['pause','previous','next','restart']) {
-  document.getElementById(action).onclick = () => command(action);
-}
-sceneSelect.onchange = () => command('scene', sceneSelect.value);
-rateSelect.onchange = () => command('rate', rateSelect.value);
-async function refresh() {
-  try {
-    if (!busy) {
-      const response = await fetch('/state', {cache:'no-store'});
-      if (!response.ok) throw new Error(`State HTTP ${response.status}`);
-      const data = await response.json();
-      if (!busy) showState(data);
-    }
-  } catch (error) { errorText.textContent = error.message; }
-  setTimeout(refresh, 500);
-}
-(async () => {
-  try {
-    const response = await fetch('/scenes');
-    if (!response.ok) throw new Error(`Scenes HTTP ${response.status}`);
-    for (const scene of await response.json()) {
-      sceneSelect.add(new Option(`${scene.name} (${scene.samples} samples)`, scene.token));
-    }
-    const selected = new URLSearchParams(location.search).get('scene');
-    if (selected) await command('scene', selected);
-    sceneSelect.disabled = false;
-    document.querySelectorAll('[data-control]').forEach(button => button.disabled = false);
-    refresh();
-  } catch (error) { errorText.textContent = error.message; }
-})();
-</script>
+<script src="/player.js"></script>
 </html>

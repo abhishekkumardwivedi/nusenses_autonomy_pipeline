@@ -1,4 +1,5 @@
-"""Stage 2 entry point. Reuses Stage 1 signaling and browser WebRTC client."""
+"""Stage 2/3 entry point. Shared sensor timeline and original WebRTC transport."""
+import argparse
 import logging
 import os
 import sys
@@ -13,12 +14,19 @@ from nuscenes_player.player import Player, PlayerTrack
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--stage", type=int, choices=(2, 3), default=3)
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
     logging.info("Loading nuScenes metadata and the initial sample...")
     source = NuScenesSource(os.getenv("NUSCENES_DATAROOT", "/workspace/autonomy/datasets/nuscenes"),
                             os.getenv("NUSCENES_VERSION", "v1.0-mini"))
-    player = Player(source, os.getenv("NUSCENES_SCENE", source.scenes[0]["name"]))
+    encoder = None
+    if args.stage == 3:
+        from models.camera_encoder import CameraEncoder
+        encoder = CameraEncoder()
+    player = Player(source, os.getenv("NUSCENES_SCENE", source.scenes[0]["name"]), encoder)
     app = create_app(lambda peer_id: PlayerTrack(peer_id, player), Path(__file__).with_name("index.html"))
 
     async def scenes(request):
@@ -39,7 +47,11 @@ def main():
             player.playing, player.error = False, str(exc)
             return web.json_response({"error": str(exc)}, status=500)
 
-    app.add_routes([web.get("/scenes", scenes), web.get("/state", state), web.post("/control", control)])
+    async def player_script(request):
+        return web.FileResponse(Path(__file__).with_name("player.js"), headers={"Cache-Control": "no-store"})
+
+    app.add_routes([web.get("/scenes", scenes), web.get("/state", state), web.post("/control", control),
+                    web.get("/player.js", player_script)])
     app.on_startup.append(player.start)
     app.on_shutdown.append(player.shutdown)
     logging.info("nuScenes player: %s (%s), binding 0.0.0.0:8080", source.root, source.nusc.version)
