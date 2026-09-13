@@ -5,14 +5,14 @@ import time
 from fractions import Fraction
 from aiortc import VideoStreamTrack
 from av import VideoFrame
-from .renderer import render, FOCUS_MODES, PANELS
+from .renderer import render, FOCUS_MODES, PANELS, SPATIAL_PANELS
 from .nuscenes_source import CAMERAS
 
 LOG = logging.getLogger("player")
 
 
 class Player:
-    def __init__(self, source, scene, encoder=None):
+    def __init__(self, source, scene, encoder=None, spatial=None):
         self.source, self.initial_scene = source, scene
         self.lock = asyncio.Lock()
         self.playing, self.rate, self.error = False, 1.0, None
@@ -22,6 +22,7 @@ class Player:
         self.fps_start, self.advances = time.monotonic(), 0
         self.task = None
         self.encoder, self.data = encoder, None
+        self.spatial = spatial
         self.view = {"focus": "overview", "feature_camera": "CAM_FRONT", "feature_mode": "mean", "feature_channel": 0}
 
     def _render(self, scene, samples, index):
@@ -33,6 +34,8 @@ class Player:
             tensor, encoder_info = self.encoder.encode(data["cameras"])
             data["feature_tensor"] = tensor
             data["features"] = tensor.numpy()
+            if self.spatial is not None:
+                data.update(self.spatial.project(tensor, data))
         render_start = time.monotonic()
         frame = render(data, scene, samples[index], index, len(samples), self.view, encoder_info)
         rendered = time.monotonic()
@@ -43,7 +46,8 @@ class Player:
                    "sensor_load_ms": round((loaded - start) * 1000, 1),
                    "preprocess_ms": encoder_info["preprocess_ms"], "camera_encoder_ms": encoder_info["camera_encoder_ms"],
                    "render_ms": round((rendered - render_start) * 1000, 1), "load_render_ms": round(ms, 1),
-                   "total_ms": round(ms, 1), "view_render_ms": 0, "encoder": encoder_info}
+                   "total_ms": round(ms, 1), "view_render_ms": 0, "encoder": encoder_info,
+                   "spatial": data.get("spatial")}
         LOG.info("scene=%s sample=%s/%s timestamp=%s load=%.1fms render=%.1fms total=%.1fms",
                  scene["name"], index + 1, len(samples), samples[index]["timestamp"],
                  details["load_ms"], details["render_ms"], ms)
@@ -78,14 +82,15 @@ class Player:
                 "playing": self.playing, "rate": self.rate, "error": self.error,
                 "playback_fps": round(self.advances / elapsed, 2) if self.playing else 0,
                 "source_fps": round(1 / source_interval, 2) if source_interval > 0 else 0,
-                "stage": 3 if self.encoder is not None else 2, "view": dict(self.view),
-                "panels": PANELS if self.encoder is not None else {}, "video_size": [1600, 900],
+                "stage": 4 if self.spatial is not None else (3 if self.encoder is not None else 2), "view": dict(self.view),
+                "panels": SPATIAL_PANELS if self.spatial is not None else (PANELS if self.encoder is not None else {}), "video_size": [1600, 900],
                 **self.details}
 
     async def change_view(self, action, value):
         view = dict(self.view)
         if action == "focus":
-            if value not in FOCUS_MODES or (value == "FEATURE" and self.encoder is None):
+            if (value not in FOCUS_MODES or (value == "FEATURE" and self.encoder is None)
+                    or (value == "SPATIAL" and self.spatial is None)):
                 raise ValueError("Invalid/unavailable focus panel")
             view["focus"] = value
         elif action == "feature_camera":

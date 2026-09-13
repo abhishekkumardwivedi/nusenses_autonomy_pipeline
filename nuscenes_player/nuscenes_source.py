@@ -42,6 +42,7 @@ class NuScenesSource:
                 raise ValueError(f"Sample {sample['token']} has no {channel}")
         reference = self.nusc.get("ego_pose", records["LIDAR_TOP"]["ego_pose_token"])
         cameras, radars, lidar = {}, [], None
+        camera_geometry = {}
         info = {}
         for channel, record in records.items():
             path = self.root / record["filename"]
@@ -52,6 +53,12 @@ class NuScenesSource:
                 if image is None:
                     raise FileNotFoundError(f"Cannot read camera: {path}")
                 cameras[channel] = image
+                calibration = self.nusc.get("calibrated_sensor", record["calibrated_sensor_token"])
+                capture_pose = self.nusc.get("ego_pose", record["ego_pose_token"])
+                camera_geometry[channel] = {
+                    "intrinsic": np.asarray(calibration["camera_intrinsic"], dtype=np.float64),
+                    "to_ego": sensor_to_ego(calibration, capture_pose, reference),
+                }
             else:
                 cloud = (LidarPointCloud if channel == "LIDAR_TOP" else RadarPointCloud).from_file(str(path))
                 calibration = self.nusc.get("calibrated_sensor", record["calibrated_sensor_token"])
@@ -67,5 +74,5 @@ class NuScenesSource:
                  sample["token"], sample["timestamp"],
                  ", ".join(f"{c}:{v['token']} dt={v['offset_ms']:+.1f}ms" for c, v in info.items()),
                  lidar.shape[1], radar.shape[1])
-        return {"cameras": cameras, "lidar": lidar, "radar": radar,
+        return {"cameras": cameras, "camera_geometry": camera_geometry, "lidar": lidar, "radar": radar,
                 "sensors": info, "ego_pose": reference}

@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nuScenes Stage 3 · Camera Encoder + Multi-Sensor Playback</title>
+<title>nuScenes · Camera Features and Spatial BEV</title>
 <style>
 body { max-width:1600px; margin:20px auto; padding:0 16px; background:#111820; color:#e9edf2; font:15px system-ui; }
 h1 { font-size:24px; margin:12px 0; }
@@ -52,7 +52,7 @@ pre { overflow:auto; font-size:12px; } .controls { display:flex; flex-wrap:wrap;
 <li>Re-render the chosen panel and stream it over WebRTC. Video refresh does not rerun inference.</li>
 </ol>
 <p><strong>dt</strong> is sensor capture-time offset relative to the selected nuScenes sample/reference time. Batching the images for neural inference does not remove this temporal skew.</p>
-<p>LiDAR and radar remain raw/geometric. No learned BEV, depth, detection, or other Stage 4 processing exists.</p>
+<p id="spatial-note" hidden>Camera features are placed in metric BEV using sparse LiDAR depth. This is not camera-only inference. Empty cells have no evidence and do not mean free space. No temporal memory, detection or learned sensor fusion.</p>
 </section>
 <details><summary>Sample and sensor synchronization details</summary><pre id="details"></pre></details>
 <p>One shared timeline for this test. Next/Previous/Restart/scene selection pause playback. End of scene holds the final sample.</p>

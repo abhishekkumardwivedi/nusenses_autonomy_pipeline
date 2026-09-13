@@ -63,7 +63,9 @@ def render_stage2(data, scene, sample, index, total):
 PANELS = {name: [(i % 3) * 533, 48 + (i // 3) * 244, 531, 240]
           for i, name in enumerate(CAMERAS)}
 PANELS.update({"BEV": [0, 542, 530, 350], "FEATURE": [540, 542, 580, 350]})
-FOCUS_MODES = ("overview", *CAMERAS, "BEV", "LIDAR", "RADAR", "FEATURE")
+SPATIAL_PANELS = {**PANELS, "BEV": [0, 542, 530, 350],
+                  "SPATIAL": [533, 542, 534, 350], "FEATURE": [1070, 542, 530, 350]}
+FOCUS_MODES = ("overview", *CAMERAS, "BEV", "LIDAR", "RADAR", "FEATURE", "SPATIAL")
 
 
 def fit_image(frame, image, rect, nearest=False):
@@ -137,13 +139,41 @@ def feature_panel(frame, data, view, rect):
     text(frame, f"Per-map min/max: {low:.3f} / {high:.3f} | not semantic classes", x + 10, y + h - 8, 0.43)
 
 
+def spatial_panel(frame, data, rect):
+    x, y, w, h = rect
+    text(frame, "CAMERA SPATIAL BEV", x + 10, y + 20)
+    text(frame, "LiDAR-assisted depth for geometry validation", x + 10, y + 40, .45)
+    evidence = data["bev_counts"].numpy() > 0
+    activation = data["bev_tensor"].numpy()[0]
+    activation = np.abs(activation).mean(axis=0)
+    normalized = np.zeros_like(activation)
+    if evidence.any():
+        values = activation[evidence]
+        low, high = values.min(), values.max()
+        normalized[evidence] = (values - low) / (high - low) if high > low else 1
+    heatmap = cv2.applyColorMap(np.rint(normalized * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
+    heatmap[~evidence] = (36, 36, 36)  # unknown, never a free-space prediction
+    heatmap = np.ascontiguousarray(heatmap[::-1, ::-1])
+    side = min(w - 24, h - 88)
+    left, top = x + (w - side) // 2, y + 51
+    fit_image(frame, heatmap, [left, top, side, side], nearest=True)
+    for i in range(0, 201, 20):
+        offset = min(side - 1, round(i * side / 200))
+        cv2.line(frame, (left + offset, top), (left + offset, top + side - 1), (58, 58, 58))
+        cv2.line(frame, (left, top + offset), (left + side - 1, top + offset), (58, 58, 58))
+    center = (left + side // 2, top + side // 2)
+    cv2.arrowedLine(frame, center, (center[0], center[1] - max(12, side // 20)), (100, 240, 100), 1)
+    text(frame, "+X up / +Y left | +/-50m | 0.5m cells", x + 10, y + h - 22, .43)
+    text(frame, "Gray = no evidence, not free space | mean abs features", x + 10, y + h - 5, .40)
+
+
 def render(data, scene, sample, index, total, view=None, metrics=None):
     view = view or {"focus": "overview", "feature_camera": "CAM_FRONT", "feature_mode": "mean", "feature_channel": 0}
     focus = view["focus"]
     if focus == "overview" and "features" not in data:
         return render_stage2(data, scene, sample, index, total)
     frame = np.full((HEIGHT, WIDTH, 3), (25, 21, 18), np.uint8)
-    stage = 3 if "features" in data else 2
+    stage = 4 if "bev_tensor" in data else (3 if "features" in data else 2)
     text(frame, f"Stage {stage} | {scene['name']} | sample {index + 1}/{total} | {sample['timestamp']} us | {focus}", 15, 27, 0.65)
     if focus in CAMERAS:
         camera_panel(frame, data, focus, [0, 48, WIDTH, HEIGHT - 48])
@@ -151,11 +181,17 @@ def render(data, scene, sample, index, total, view=None, metrics=None):
         draw_bev(frame, data, [0, 48, WIDTH, HEIGHT - 48], focus)
     elif focus == "FEATURE":
         feature_panel(frame, data, view, [0, 48, WIDTH, HEIGHT - 48])
+    elif focus == "SPATIAL":
+        spatial_panel(frame, data, [0, 48, WIDTH, HEIGHT - 48])
     else:
         for camera in CAMERAS:
             camera_panel(frame, data, camera, PANELS[camera])
-        draw_bev(frame, data, PANELS["BEV"])
-        feature_panel(frame, data, view, PANELS["FEATURE"])
+        panels = SPATIAL_PANELS if stage == 4 else PANELS
+        draw_bev(frame, data, panels["BEV"])
+        feature_panel(frame, data, view, panels["FEATURE"])
+        if stage == 4:
+            spatial_panel(frame, data, panels["SPATIAL"])
+            return frame
         info = metrics or {}
         lines = ["AI inference: Camera Encoder ENABLED", "ImageNet ResNet-50 (shared 6-camera batch)",
                  "Backbone 2048 -> fixed 1x1 mean -> 256", "Input [1,6,3,256,448]", "Features [1,6,256,8,14]",

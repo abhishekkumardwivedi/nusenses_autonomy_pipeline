@@ -15,7 +15,7 @@ from nuscenes_player.player import Player, PlayerTrack
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--stage", type=int, choices=(2, 3), default=3)
+    parser.add_argument("--stage", type=int, choices=(2, 3, 4), default=4)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
@@ -23,10 +23,14 @@ def main():
     source = NuScenesSource(os.getenv("NUSCENES_DATAROOT", "/workspace/autonomy/datasets/nuscenes"),
                             os.getenv("NUSCENES_VERSION", "v1.0-mini"))
     encoder = None
-    if args.stage == 3:
+    if args.stage >= 3:
         from models.camera_encoder import CameraEncoder
         encoder = CameraEncoder()
-    player = Player(source, os.getenv("NUSCENES_SCENE", source.scenes[0]["name"]), encoder)
+    spatial = None
+    if args.stage == 4:
+        from models.spatial_bev import SpatialBEV
+        spatial = SpatialBEV(encoder.device)
+    player = Player(source, os.getenv("NUSCENES_SCENE", source.scenes[0]["name"]), encoder, spatial)
     app = create_app(lambda peer_id: PlayerTrack(peer_id, player), Path(__file__).with_name("index.html"))
 
     async def scenes(request):

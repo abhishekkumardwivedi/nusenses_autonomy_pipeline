@@ -9,7 +9,7 @@ const featureCamera = document.getElementById('feature-camera');
 const featureMode = document.getElementById('feature-mode');
 const featureChannel = document.getElementById('feature-channel');
 const cameras = ['CAM_FRONT_LEFT','CAM_FRONT','CAM_FRONT_RIGHT','CAM_BACK_LEFT','CAM_BACK','CAM_BACK_RIGHT'];
-for (const name of [...cameras, 'BEV', 'LIDAR', 'RADAR', 'FEATURE']) focusSelect.add(new Option(name, name));
+for (const name of [...cameras, 'BEV', 'LIDAR', 'RADAR', 'FEATURE', 'SPATIAL']) focusSelect.add(new Option(name === 'SPATIAL' ? 'Camera Spatial BEV' : name, name));
 for (const name of cameras) featureCamera.add(new Option(name, name));
 featureCamera.value = 'CAM_FRONT';
 function updateInspection(state) {
@@ -21,11 +21,21 @@ function updateInspection(state) {
   featureChannel.disabled = state.view.feature_mode !== 'channel' || !state.encoder.enabled;
   featureCamera.disabled = featureMode.disabled = !state.encoder.enabled;
   focusSelect.querySelector('option[value="FEATURE"]').disabled = !state.encoder.enabled;
+  focusSelect.querySelector('option[value="SPATIAL"]').disabled = !state.spatial;
   document.getElementById('heading').textContent = `nuScenes Stage ${state.stage} · ${state.encoder.enabled ? 'Camera Encoder + ' : ''}Multi-Sensor Playback`;
   document.getElementById('stage-label').textContent = `Recorded real-world sensor data · AI inference: Camera Encoder ${state.encoder.enabled ? 'ENABLED' : 'DISABLED (Stage 2)'}`;
+  if (state.spatial) {
+    document.getElementById('heading').textContent = 'Stage 4 — Camera Features → Spatial BEV';
+    document.getElementById('stage-label').textContent = 'Camera Spatial BEV · LiDAR-assisted depth for geometry validation · Current sample only; no temporal memory';
+  }
   const enc = state.encoder;
-  document.getElementById('stage3-steps').hidden = !enc.enabled;
-  const rows = enc.enabled ? [
+  document.getElementById('stage3-steps').hidden = !enc.enabled || !!state.spatial;
+  document.getElementById('spatial-note').hidden = !state.spatial;
+  const rows = state.spatial ? [
+    `CAMERA → SPATIAL BEV\nInput [1,6,3,256,448]\nFeatures [1,6,256,8,14]\nBEV ${JSON.stringify(state.spatial.shape)}`,
+    `GEOMETRY\nDepth: nuScenes LiDAR (validation oracle)\nRange ±50 m / resolution 0.5 m\n+X forward / +Y left / +Z up\n${state.spatial.occupied_cells} cells with evidence; gray = unknown`,
+    `CURRENT SAMPLE\nEncoder ${state.camera_encoder_ms} ms\nCamera-to-BEV ${state.spatial.camera_to_bev_ms} ms\nTotal processing ${state.total_ms} ms\nGPU allocated ${state.spatial.gpu_allocated_mb} MiB`
+  ] : enc.enabled ? [
     `MODEL / WEIGHTS\n${enc.model} / ${enc.weights}\n${enc.projection}`,
     `DEVICE / DTYPE\n${enc.device} / ${enc.gpu}\n${enc.dtype}; input ${enc.input_dtype}\nCache ${enc.cache_device} / ${enc.cache_dtype}`,
     `TENSORS\nInput ${JSON.stringify(enc.input_shape)}\nBackbone batch ${JSON.stringify(enc.backbone_batch_shape)}\nBackbone output ${JSON.stringify(enc.backbone_output_shape)}\nOutput ${JSON.stringify(enc.output_shape)}`,
@@ -45,7 +55,7 @@ function updateInspection(state) {
     for (const [name, rect] of Object.entries(panels)) {
       const button = document.createElement('button');
       button.className = 'expand';
-      button.textContent = name === 'overview' ? '↙ Overview' : `↗ ${name}`;
+      button.textContent = name === 'overview' ? '↙ Overview' : `↗ ${name === 'SPATIAL' ? 'Camera BEV' : name}`;
       button.setAttribute('aria-label', name === 'overview' ? 'Minimize panel' : `Expand ${name}`);
       button.style.left = `${(rect[0] + rect[2] - 8) / 16}%`;
       button.style.top = `${(rect[1] + 6) / 9}%`;
