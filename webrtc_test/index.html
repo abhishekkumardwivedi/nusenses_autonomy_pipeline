@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage 1 · WebRTC video test</title>
+<style>
+  body { max-width: 1280px; margin: 32px auto; padding: 0 20px; background: #111820; color: #e9edf2; font: 16px system-ui; }
+  video { display: block; width: 100%; aspect-ratio: 16/9; background: #000; margin: 20px 0; }
+  button { padding: 12px 20px; margin-right: 10px; cursor: pointer; }
+  #stats { font-variant-numeric: tabular-nums; }
+</style>
+<h1>Stage 1 · Live WebRTC video</h1>
+<p>Synthetic video · 1280 × 720 · target 25 FPS</p>
+<video id="video" autoplay playsinline muted></video>
+<button id="start">Start Stream</button><button id="stop" disabled>Stop Stream</button>
+<p>Status: <strong id="status">Disconnected</strong></p>
+<p id="stats">No video received.</p>
+<script>const iceServers = __ICE_SERVERS__;</script>
+<script src="/client.js"></script>
+</html>
